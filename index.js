@@ -1,5 +1,3 @@
-// index.js
-
 const express = require("express");
 const bodyParser = require("body-parser");
 const path = require("path");
@@ -12,17 +10,14 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(bodyParser.json());
 app.use(express.static("public"));
 
 // OpenAI setup
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-// In-memory conversation history
 const userConversations = {}; // { phoneNumber: [ { role, content } ] }
 
-// Load Excel product data once
+// Load Excel product data
 function loadProductData() {
   const filePath = path.join(__dirname, "uploads", "product-data.xlsx");
   if (!fs.existsSync(filePath)) return [];
@@ -32,7 +27,6 @@ function loadProductData() {
 }
 const productData = loadProductData();
 
-// Helper: filter exact matches on name/category/price
 function filterProducts(query) {
   const lower = query.toLowerCase();
   return productData.filter(p => {
@@ -49,25 +43,27 @@ function filterProducts(query) {
   });
 }
 
-// Helper: take top-3 products as fallback suggestions
 function topFallback() {
   return productData.slice(0, 3);
 }
 
-// System prompt to enforce scope
 const systemPrompt = {
   role: "system",
   content: `
-You are the official WhatsApp assistant for our jewelry store.
-• You MUST only answer questions about our catalog (product names, categories, price ranges).
-• If the user asks anything else, you should NOT reply directly, but trigger no function call, so that the code will send a refusal message.
-• To answer product queries, you must call exactly one of these functions:
-  1) getProducts – to retrieve matching products.
-  2) suggestFallback – to retrieve top-3 suggestions when no exact match.
+You are an AI assistant for a luxury jewellery brand. Your job is to:
+- Understand natural language
+- Recommend jewellery from a product list
+- Include product name, price, and image link
+- Never make up products
+- Answer politely, like a knowledgeable store assistant
+- If no exact match, say "We don't have exact matching products, but here are a few similar products that you might like", then suggest top-3 similar products
+- If out of scope, say "🙏 Sorry, I only handle questions about our jewellery products. Please ask about a product name, category, or price (e.g. under ₹5000). You can also visit our website to place an order: www.rkjewellers.in"
+- Always respond in a friendly, helpful tone
+- Always respond to greeting messages like "Hello", "Hi", "Hey" with a friendly greeting message
+- Always respond to goodbye messages like "Bye", "Goodbye", "See you later" with a friendly goodbye message
 `
 };
 
-// Function definitions for OpenAI
 const functions = [
   {
     name: "getProducts",
@@ -91,7 +87,6 @@ const functions = [
   }
 ];
 
-// Send WhatsApp via Meta Graph API
 async function sendWhatsApp(to, text) {
   return axios.post(
     `https://graph.facebook.com/${process.env.VERSION}/${process.env.PHONE_NUMBER_ID}/messages`,
@@ -131,10 +126,8 @@ app.post("/webhook", async (req, res) => {
     const userQuery = msg?.text?.body?.trim();
     if (!from || !userQuery) return res.sendStatus(200);
 
-    // Initialize history
     if (!userConversations[from]) userConversations[from] = [];
 
-    // Build message list
     const history = userConversations[from].slice(-6);
     const messages = [
       systemPrompt,
@@ -142,7 +135,6 @@ app.post("/webhook", async (req, res) => {
       { role: "user", content: userQuery }
     ];
 
-    // Call OpenAI with function-calling
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
       messages,
@@ -155,7 +147,6 @@ app.post("/webhook", async (req, res) => {
     let assistantResponse;
 
     if (choice.function_call) {
-      // Model decided to call a function
       const { name, arguments: argsJSON } = choice.function_call;
       let functionResult;
 
@@ -168,7 +159,6 @@ app.post("/webhook", async (req, res) => {
         functionResult = JSON.stringify({ products: fallback }, null, 2);
       }
 
-      // Add function call & result to messages, then get final assistant reply
       messages.push(choice);
       messages.push({
         role: "function",
@@ -180,23 +170,22 @@ app.post("/webhook", async (req, res) => {
         model: "gpt-4",
         messages
       });
+
       assistantResponse = second.choices[0].message.content.trim();
 
     } else {
-      // No function called → out-of-scope
-      assistantResponse =
-        "🙏 Sorry, I only handle questions about our jewelry products. " +
-        "Please ask about a product name, category, or price (e.g. under ₹5000).";
+      // Allow GPT to respond freely (e.g. for greetings or farewells)
+      assistantResponse = choice.content?.trim() ||
+        "🙏 Sorry, I didn't understand that. Please ask about a product.";
     }
 
-    // Store assistant response in history
     userConversations[from].push({ role: "user", content: userQuery });
     userConversations[from].push({ role: "assistant", content: assistantResponse });
+
     if (userConversations[from].length > 12) {
       userConversations[from] = userConversations[from].slice(-12);
     }
 
-    // Send it back
     await sendWhatsApp(from, assistantResponse);
     res.sendStatus(200);
 
@@ -206,8 +195,7 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// Start server
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Expose with e.g. ngrok http ${PORT}`);
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`🌐 Expose with: ngrok http ${PORT}`);
 });
