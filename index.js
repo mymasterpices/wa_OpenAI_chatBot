@@ -125,20 +125,26 @@ const systemPrompt = {
 `
 };
 
-const functions = [
+const tools = [
   {
-    name: "getProducts",
-    description: "Retrieve products matching the user query from the catalog.",
-    parameters: {
-      type: "object",
-      properties: { query: { type: "string", description: "Product-related query" } },
-      required: ["query"]
+    type: "function",
+    function: {
+      name: "getProducts",
+      description: "Retrieve products matching the user query from the catalog.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string", description: "Product-related query" } },
+        required: ["query"]
+      }
     }
   },
   {
-    name: "suggestFallback",
-    description: "Retrieve top-3 suggestions when no exact match is found.",
-    parameters: { type: "object", properties: {}, required: [] }
+    type: "function",
+    function: {
+      name: "suggestFallback",
+      description: "Retrieve top-3 suggestions when no exact match is found.",
+      parameters: { type: "object", properties: {}, required: [] }
+    }
   }
 ];
 
@@ -220,16 +226,17 @@ app.post("/webhook", async (req, res) => {
     const first = await openai.chat.completions.create({
       model: MODEL,
       messages,
-      functions,
-      function_call: "auto"
+      tools,
+      tool_choice: "auto"
     });
 
     const choice = first.choices[0].message;
     let assistantResponse = "";
     let productsToSend = [];
 
-    if (choice.function_call) {
-      const { name, arguments: argsJSON } = choice.function_call;
+    if (choice.tool_calls && choice.tool_calls.length > 0) {
+      const toolCall = choice.tool_calls[0];
+      const { name, arguments: argsJSON } = toolCall.function;
       let functionResult;
 
       console.log(`🔧 Function called: ${name} with args: ${argsJSON}`);
@@ -253,7 +260,11 @@ app.post("/webhook", async (req, res) => {
 
       // Add function call and result to message history
       messages.push(choice);
-      messages.push({ role: "function", name, content: functionResult });
+      messages.push({
+        role: "tool",
+        content: functionResult,
+        tool_call_id: toolCall.id
+      });
 
       // ── Second call to OpenAI ──
       const second = await openai.chat.completions.create({ model: MODEL, messages });
@@ -276,7 +287,6 @@ app.post("/webhook", async (req, res) => {
         const category = p["Product Category"] || "Jewelry";
         const subCategory = p["Sub Category"] || "";
         const collection = p["Collection"] || "";
-        const style = p["Style"] || "";
         const price = p["Sale Price"] ? `₹${p["Sale Price"]}` : "Price not available";
         const jewelCode = p["JewelCode"] || "";
         const goldPurity = p["Gold Purity"] || "";
@@ -288,7 +298,6 @@ app.post("/webhook", async (req, res) => {
         if (subCategory) productText += ` - ${subCategory}`;
         productText += `*\n💰 ${price}`;
         if (jewelCode) productText += `\n🏷️ Code: ${jewelCode}`;
-        if (style) productText += `\n🎨 Style: ${style}`;
         if (goldPurity) productText += `\n⚡ Gold: ${goldPurity}`;
         if (gender) productText += `\n👤 Gender: ${gender}`;
         if (collection) productText += `\n💎 Collection: ${collection}`;
@@ -337,6 +346,7 @@ app.get("/health", (req, res) => {
     status: "healthy",
     timestamp: new Date().toISOString(),
     productsLoaded: productData.length,
+    toolsConfigured: tools.length,
     environment: {
       openaiConfigured: !!process.env.OPENAI_API_KEY,
       whatsappConfigured: !!process.env.WHATSAPP_TOKEN,
