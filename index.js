@@ -15,7 +15,7 @@ app.use(express.static("public"));
 
 // ─────────── OpenAI ───────────
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const MODEL = "gpt-4o";              // ★ higher rate-limit than gpt-4
+const MODEL = "gpt-4";              // Using GPT-4 model
 const MAX_ROWS_TO_MODEL = 20;          // ★ hard cap
 const userConversations = {};          // { phone : [ { role, content } ] }
 
@@ -203,12 +203,41 @@ app.get("/test-products", (req, res) => {
 // ─────────── Webhook receiver ───────────
 app.post("/webhook", async (req, res) => {
   try {
-    const msg = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-    const from = msg?.from;
-    const userQuery = msg?.text?.body?.trim();
+    // Add detailed logging of the incoming webhook
+    console.log("📥 Incoming webhook payload:", JSON.stringify(req.body, null, 2));
 
-    if (!from || !userQuery) {
-      console.log("⚠️ Invalid message format or missing data");
+    // Validate webhook structure
+    if (!req.body?.entry?.[0]?.changes?.[0]?.value) {
+      console.log("⚠️ Invalid webhook format: Missing entry or changes");
+      return res.sendStatus(200);
+    }
+
+    const value = req.body.entry[0].changes[0].value;
+
+    // Check if this is a status update (ignore these)
+    if (value.statuses) {
+      console.log("ℹ️ Received status update, ignoring");
+      return res.sendStatus(200);
+    }
+
+    // Extract message details
+    const msg = value.messages?.[0];
+    if (!msg) {
+      console.log("⚠️ No message found in webhook");
+      return res.sendStatus(200);
+    }
+
+    const from = msg.from;
+    const userQuery = msg.text?.body?.trim();
+
+    // Validate required fields
+    if (!from) {
+      console.log("⚠️ Missing sender information");
+      return res.sendStatus(200);
+    }
+
+    if (!userQuery) {
+      console.log("⚠️ Missing or empty message text");
       return res.sendStatus(200);
     }
 
